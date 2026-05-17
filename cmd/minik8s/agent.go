@@ -15,9 +15,9 @@ import (
 )
 
 var (
-	serverURL string
-	nodeName  string
-	nodeIP    string
+	agentServerURL string
+	nodeName       string
+	nodeIP         string
 )
 
 var agentCmd = &cobra.Command{
@@ -27,14 +27,14 @@ var agentCmd = &cobra.Command{
 }
 
 func init() {
-	agentCmd.Flags().StringVar(&serverURL, "server", "http://localhost:8080", "Server URL")
+	agentCmd.Flags().StringVar(&agentServerURL, "server", "http://localhost:8080", "Server URL")
 	agentCmd.Flags().StringVar(&nodeName, "name", "", "Node name (default: hostname)")
 	agentCmd.Flags().StringVar(&nodeIP, "ip", "", "Node IP (auto-detected if not specified)")
 }
 
 func runAgent(cmd *cobra.Command, args []string) {
 	log.Printf("Starting MiniK8s Agent")
-	log.Printf("Server: %s", serverURL)
+	log.Printf("Server: %s", agentServerURL)
 
 	if nodeName == "" {
 		nodeName, _ = os.Hostname()
@@ -85,7 +85,7 @@ func registerNode() error {
 
 	data, _ := json.Marshal(req)
 	resp, err := http.Post(
-		fmt.Sprintf("%s/api/v1/nodes/register", serverURL),
+		fmt.Sprintf("%s/api/v1/nodes/register", agentServerURL),
 		"application/json",
 		bytes.NewBuffer(data),
 	)
@@ -110,7 +110,7 @@ func registerNode() error {
 func sendHeartbeat() error {
 	req, err := http.NewRequest(
 		"POST",
-		fmt.Sprintf("%s/api/v1/nodes/%s/heartbeat", serverURL, nodeName),
+		fmt.Sprintf("%s/api/v1/nodes/%s/heartbeat", agentServerURL, nodeName),
 		nil,
 	)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/cobra"
 	"github.com/weijia/my-k8s/pkg/api"
 	"github.com/weijia/my-k8s/pkg/runtime"
 	"github.com/weijia/my-k8s/pkg/scheduler"

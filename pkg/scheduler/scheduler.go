@@ -2,8 +2,7 @@ package scheduler
 
 import (
 	"fmt"
-	"math/rand"
-	"time"
+	"math/rand/v2"
 
 	"github.com/weijia/my-k8s/pkg/api"
 	"github.com/weijia/my-k8s/pkg/storage"
@@ -72,8 +71,7 @@ func (s *Scheduler) filterNodes(pod *api.Pod, nodes []api.Node) []api.Node {
 
 // selectNode 选择节点（随机）
 func (s *Scheduler) selectNode(nodes []api.Node) api.Node {
-	rand.Seed(time.Now().UnixNano())
-	return nodes[rand.Intn(len(nodes))]
+	return nodes[rand.IntN(len(nodes))]
 }
 
 // GetNodeStatus 获取节点状态

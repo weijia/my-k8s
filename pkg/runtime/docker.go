@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 	"github.com/weijia/my-k8s/pkg/api"
 )
 
@@ -34,16 +34,17 @@ func (d *DockerRuntime) CreatePod(pod *api.Pod) error {
 	// 创建网络（简化：使用 host 网络）
 	for i, c := range pod.Spec.Containers {
 		containerName := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, c.Name)
-		
+
 		// 准备端口映射
-		portBindings := make(map[string][]types.PortBinding)
+		portBindings := make(nat.PortMap)
 		for _, port := range c.Ports {
 			if port.HostPort > 0 {
-				portKey := fmt.Sprintf("%d/%s", port.ContainerPort, port.Protocol)
-				if portKey == fmt.Sprintf("%d/", port.ContainerPort) {
-					portKey = fmt.Sprintf("%d/tcp", port.ContainerPort)
+				proto := "tcp"
+				if port.Protocol == "udp" {
+					proto = "udp"
 				}
-				portBindings[portKey] = []types.PortBinding{
+				containerPort, _ := nat.NewPort(proto, fmt.Sprintf("%d", port.ContainerPort))
+				portBindings[containerPort] = []nat.PortBinding{
 					{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", port.HostPort)},
 				}
 			}
@@ -74,7 +75,7 @@ func (d *DockerRuntime) CreatePod(pod *api.Pod) error {
 		}
 
 		hostConfig := &container.HostConfig{
-			NetworkMode:  "host",
+			NetworkMode:  container.NetworkMode("host"),
 			PortBindings: portBindings,
 		}
 
@@ -101,7 +102,7 @@ func (d *DockerRuntime) CreatePod(pod *api.Pod) error {
 			ContainerID: resp.ID,
 			Image:       c.Image,
 		})
-		
+
 		if i == 0 {
 			pod.Status.Phase = api.PodRunning
 		}
@@ -116,25 +117,25 @@ func (d *DockerRuntime) DeletePod(pod *api.Pod) error {
 
 	for _, c := range pod.Spec.Containers {
 		containerName := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, c.Name)
-		
+
 		// 查找容器
+		filter := filters.NewArgs()
+		filter.Add("name", containerName)
 		containers, err := d.client.ContainerList(ctx, types.ContainerListOptions{
-			All: true,
-			Filters: map[string][]string{
-				"name": {containerName},
-			},
+			All:     true,
+			Filters: filter,
 		})
 		if err != nil {
 			continue
 		}
 
-		for _, container := range containers {
+		for _, cont := range containers {
 			// 停止容器
-			timeout := 10 * time.Second
-			d.client.ContainerStop(ctx, container.ID, &timeout)
-			
+			timeout := 10
+			d.client.ContainerStop(ctx, cont.ID, container.StopOptions{Timeout: &timeout})
+
 			// 删除容器
-			d.client.ContainerRemove(ctx, container.ID, types.ContainerRemoveOptions{
+			d.client.ContainerRemove(ctx, cont.ID, types.ContainerRemoveOptions{
 				Force: true,
 			})
 		}
@@ -154,12 +155,12 @@ func (d *DockerRuntime) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 	allRunning := true
 	for _, c := range pod.Spec.Containers {
 		containerName := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, c.Name)
-		
+
+		filter := filters.NewArgs()
+		filter.Add("name", containerName)
 		containers, err := d.client.ContainerList(ctx, types.ContainerListOptions{
-			All: true,
-			Filters: map[string][]string{
-				"name": {containerName},
-			},
+			All:     true,
+			Filters: filter,
 		})
 		if err != nil || len(containers) == 0 {
 			allRunning = false
@@ -170,11 +171,11 @@ func (d *DockerRuntime) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 			continue
 		}
 
-		container := containers[0]
+		cont := containers[0]
 		state := "unknown"
-		if container.State == "running" {
+		if cont.State == "running" {
 			state = "running"
-		} else if container.State == "exited" {
+		} else if cont.State == "exited" {
 			state = "exited"
 			allRunning = false
 		} else {
@@ -184,8 +185,8 @@ func (d *DockerRuntime) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 		status.Containers = append(status.Containers, api.ContainerStatus{
 			Name:        c.Name,
 			State:       state,
-			ContainerID: container.ID,
-			Image:       c.Image,
+			ContainerID: cont.ID,
+			Image:       cont.Image,
 		})
 	}
 
@@ -201,14 +202,14 @@ func (d *DockerRuntime) GetPodStatus(pod *api.Pod) (*api.PodStatus, error) {
 // GetContainerLogs 获取容器日志
 func (d *DockerRuntime) GetContainerLogs(pod *api.Pod, containerName string, tail int) (string, error) {
 	ctx := context.Background()
-	
+
 	fullContainerName := fmt.Sprintf("%s_%s_%s", pod.Namespace, pod.Name, containerName)
-	
+
+	filter := filters.NewArgs()
+	filter.Add("name", fullContainerName)
 	containers, err := d.client.ContainerList(ctx, types.ContainerListOptions{
-		All: true,
-		Filters: map[string][]string{
-			"name": {fullContainerName},
-		},
+		All:     true,
+		Filters: filter,
 	})
 	if err != nil || len(containers) == 0 {
 		return "", fmt.Errorf("container not found")
@@ -257,11 +258,11 @@ func (d *DockerRuntime) pullImage(ctx context.Context, image string) error {
 // ListContainers 列出所有 minik8s 容器
 func (d *DockerRuntime) ListContainers() ([]types.Container, error) {
 	ctx := context.Background()
+	filter := filters.NewArgs()
+	filter.Add("label", "minik8s.io/pod")
 	return d.client.ContainerList(ctx, types.ContainerListOptions{
-		All: true,
-		Filters: map[string][]string{
-			"label": {"minik8s.io/pod"},
-		},
+		All:     true,
+		Filters: filter,
 	})
 }
 
